@@ -22,10 +22,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/go-jsonnet/ast"
 )
@@ -1076,6 +1079,36 @@ func buildBuiltinMap(builtins []builtin) map[string]evalCallable {
 	return result
 }
 
+func builtinUrlRequest(i *interpreter, trace TraceElement, u, b value) (value, error) {
+	requestURL, err := i.getString(u, trace)
+	if err != nil {
+		return nil, err
+	}
+	requestBody, err := i.getString(b, trace)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", string(requestURL.value), bytes.NewBufferString(string(requestBody.value)))
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{
+		Timeout: time.Second * 5,
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return makeValueString(string(body)), nil
+
+}
+
 var funcBuiltins = buildBuiltinMap([]builtin{
 	&unaryBuiltin{name: "extVar", function: builtinExtVar, parameters: ast.Identifiers{"x"}},
 	&unaryBuiltin{name: "length", function: builtinLength, parameters: ast.Identifiers{"x"}},
@@ -1115,6 +1148,7 @@ var funcBuiltins = buildBuiltinMap([]builtin{
 	&unaryBuiltin{name: "encodeUTF8", function: builtinEncodeUTF8, parameters: ast.Identifiers{"str"}},
 	&unaryBuiltin{name: "decodeUTF8", function: builtinDecodeUTF8, parameters: ast.Identifiers{"arr"}},
 	&unaryBuiltin{name: "native", function: builtinNative, parameters: ast.Identifiers{"x"}},
+	&binaryBuiltin{name: "urlRequest", function: builtinUrlRequest, parameters: ast.Identifiers{"url", "body"}},
 
 	// internal
 	&unaryBuiltin{name: "$objectFlatMerge", function: builtinUglyObjectFlatMerge, parameters: ast.Identifiers{"x"}},
