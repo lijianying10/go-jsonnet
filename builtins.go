@@ -23,13 +23,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/go-jsonnet/ast"
+	"gopkg.in/yaml.v3"
 )
 
 func builtinPlus(i *interpreter, x, y value) (value, error) {
@@ -1579,6 +1583,64 @@ func buildBuiltinMap(builtins []builtin) map[string]evalCallable {
 	return result
 }
 
+func builtinParseYamlFile(i *interpreter, str value) (value, error) {
+	sval, err := i.getString(str)
+	if err != nil {
+		return nil, err
+	}
+	s := sval.getGoString()
+	fileBody, err := ioutil.ReadFile(s)
+	if err != nil {
+		return nil, i.Error(fmt.Sprintf("failed to open file: %v", err.Error()))
+	}
+	var parsedYAML interface{}
+	err = yaml.Unmarshal(fileBody, &parsedYAML)
+	if err != nil {
+		return nil, i.Error(fmt.Sprintf("failed to parse YAML: %v", err.Error()))
+	}
+	body, err := json.Marshal(parsedYAML)
+	if err != nil {
+		panic(err)
+	}
+	return builtinParseJSON(i, makeValueString(string(body)))
+}
+
+func builtinUrlRequest(i *interpreter, m, u, b value) (value, error) {
+	requestURL, err := i.getString(u)
+	if err != nil {
+		return nil, err
+	}
+	requestBody, err := i.getString(b)
+	if err != nil {
+		return nil, err
+	}
+
+	requestMethod, err := i.getString(m)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(requestMethod.getGoString(),
+		string(requestURL.getGoString()),
+		bytes.NewBufferString(string(requestBody.getGoString())))
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{
+		Timeout: time.Second * 5,
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return makeValueString(string(body)), nil
+}
+
 var funcBuiltins = buildBuiltinMap([]builtin{
 	builtinID,
 	&unaryBuiltin{name: "extVar", function: builtinExtVar, params: ast.Identifiers{"x"}},
@@ -1628,6 +1690,8 @@ var funcBuiltins = buildBuiltinMap([]builtin{
 	&unaryBuiltin{name: "decodeUTF8", function: builtinDecodeUTF8, params: ast.Identifiers{"arr"}},
 	&generalBuiltin{name: "sort", function: builtinSort, params: []generalBuiltinParameter{{name: "arr"}, {name: "keyF", defaultValue: functionID}}},
 	&unaryBuiltin{name: "native", function: builtinNative, params: ast.Identifiers{"x"}},
+	&ternaryBuiltin{name: "urlRequest", function: builtinUrlRequest, params: ast.Identifiers{"method", "url", "body"}},
+	&unaryBuiltin{name: "parseYamlFile", function: builtinParseYamlFile, params: ast.Identifiers{"str"}},
 
 	// internal
 	&unaryBuiltin{name: "$objectFlatMerge", function: builtinUglyObjectFlatMerge, params: ast.Identifiers{"x"}},
